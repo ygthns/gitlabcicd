@@ -1,0 +1,132 @@
+image: node
+
+stages:
+  - cache
+  - build
+  - test
+  - deploy review
+  - staging
+  - deploy
+  - deployment tests
+
+cache:
+  key: ${{CI_COMMIT_REF_SLUG}}
+  policy: pull
+  paths:
+    - node_modules/
+
+variables:
+  STAGING_DOMAIN: redturtlebing-staging.surge.sh
+  PRODUCTION_DOMAIN: redturtlebing.surge.sh
+
+update cache:
+  stage: cache
+  cache:
+    policy: push
+  script:
+    - npm install
+  only:
+    - schedules
+
+build website:
+  stage: build
+  script:
+    - echo $CI_COMMIT_SHORT_SHA
+    - npm install
+    - npm install -g gatsby-cli
+    - gatsby build
+  artifacts:
+    paths:
+      - ./public
+  except:
+    - schedules
+
+test artifact:
+  image: alpine
+  stage: test
+  cache: {}
+  script:
+    - grep -q "Gatsby" ./public/index.html
+  except:
+    - schedules
+
+#You can disable a job with adding a dot(.) just before job's name like .test website
+
+test website:
+  stage: test
+  script:
+    - npm install
+    - npm install -g gatsby-cli
+    - gatsby serve &
+    - sleep 5
+    - curl "http://localhost:9000" | tac | tac | grep -q "Gatsby"
+  except:
+    - schedules
+
+deploy review:
+  stage: deploy review
+  only:
+    - merge_requests #will run only merge requests
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: http://redturtlebing-$CI_COMMIT_REF_NAME.surge.sh
+    on_stop: stop review
+  script:
+    - npm install --global surge
+    - surge --project ./public --domain redturtlebing-$CI_COMMIT_REF_NAME.surge.sh
+
+stop review:
+  stage: deploy review
+  variables:
+    GIT_STRATEGY: none
+  before_script: #good practice, easy to focus on main purpose of the job.
+    - npm install --global surge
+  script:
+    - surge teardown redturtlebing-$CI_COMMIT_REF_NAME.surge.sh
+  when: manual
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+
+
+deploy staging:
+  stage: staging
+  environment:
+    name: staging
+    url: http://$STAGING_DOMAIN
+  only:
+    - master #this will execute this job only for master branch
+  script:
+    - npm install --global surge
+    - surge --project ./public --domain $STAGING_DOMAIN
+  except:
+    - schedules
+
+deploy to production:
+  stage: deploy
+  environment:
+    name: production
+    url: http://$PRODUCTION_DOMAIN
+  only:
+    - master #this will execute this job only for master branch
+  #with the following two commands, i block deployment of production until i trigger it manually.
+  # when: manual
+  # allow_failure: false
+  script:
+    - npm install --global surge
+    - surge --project ./public --domain $PRODUCTION_DOMAIN
+  except:
+    - schedules
+
+test deployment:
+  image: alpine
+  stage: deployment tests
+  only:
+    - master #this will execute this job only for master branch
+  cache: {}
+  script:
+    - apk add curl
+    - curl "redturtlebing.surge.sh" | grep -q "Kick off your next"
+  except:
+    - schedules
+
